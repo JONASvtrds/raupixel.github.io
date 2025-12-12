@@ -1,0 +1,434 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Morphing Fluido - Barba Rosa (Denso)</title>
+    <style>
+        :root {
+            --bg-dark: #0b0b0e;
+            --panel-bg: #15151a;
+            --accent: #ff007f;
+            --text: #ececec;
+        }
+
+        body {
+            margin: 0;
+            background-color: var(--bg-dark);
+            color: var(--text);
+            font-family: 'Inter', 'Segoe UI', sans-serif;
+            height: 100vh;
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+        }
+
+        /* --- Interface Superior --- */
+        header {
+            height: 80px;
+            background: var(--panel-bg);
+            border-bottom: 1px solid #333;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 20px;
+            z-index: 100;
+            box-shadow: 0 5px 20px rgba(0,0,0,0.5);
+        }
+
+        .btn {
+            background: transparent;
+            border: 1px solid var(--accent);
+            color: var(--accent);
+            padding: 10px 24px;
+            font-size: 0.85rem;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            cursor: pointer;
+            transition: all 0.4s cubic-bezier(0.23, 1, 0.32, 1);
+            border-radius: 4px;
+            position: relative;
+            overflow: hidden;
+        }
+
+        .btn:hover {
+            background: var(--accent);
+            color: #fff;
+            box-shadow: 0 0 20px rgba(255, 0, 127, 0.6);
+            transform: translateY(-2px);
+        }
+
+        .btn:active {
+            transform: scale(0.98);
+        }
+
+        /* --- Área Principal --- */
+        #stage {
+            flex: 1;
+            position: relative;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            perspective: 1000px;
+            background: radial-gradient(circle at center, #1a1a20 0%, #000 90%);
+        }
+
+        /* Área de Visualização (Canvas Final) */
+        #display-container {
+            position: absolute;
+            width: 100%;
+            height: 100%;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+        }
+
+        canvas {
+            /* Removemos o pixelated para o overlap ficar mais suave */
+            image-rendering: auto; 
+        }
+
+        #finalCanvas {
+            box-shadow: 0 0 80px rgba(0,0,0,0.8);
+            border-radius: 8px;
+            /* Max width/height soltos para permitir o canvas grande */
+            max-width: 95%;
+            max-height: 95%;
+            display: none;
+        }
+
+        /* Canvas de Input (Desenho) */
+        #input-wrapper {
+            position: absolute;
+            z-index: 10;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            transition: all 0.8s ease;
+        }
+
+        #inputCanvas {
+            background: #fff;
+            border: 2px dashed #444;
+            cursor: crosshair;
+            border-radius: 4px;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.3);
+        }
+
+        .label {
+            position: absolute;
+            background: rgba(0,0,0,0.6);
+            padding: 4px 8px;
+            border-radius: 4px;
+            font-size: 0.7rem;
+            color: #aaa;
+            pointer-events: none;
+        }
+
+        /* --- Overlay de Texto --- */
+        #status-overlay {
+            position: absolute;
+            bottom: 30px;
+            left: 30px;
+            font-family: 'Courier New', monospace;
+            font-size: 1rem;
+            color: var(--accent);
+            text-shadow: 0 0 10px rgba(255,0,127,0.5);
+            pointer-events: none;
+        }
+
+        #info-text {
+            position: absolute;
+            top: 20px;
+            left: 50%;
+            transform: translateX(-50%);
+            color: #666;
+            font-size: 0.9rem;
+            text-align: center;
+            width: 100%;
+            pointer-events: none;
+        }
+
+        .fade-out {
+            opacity: 0;
+            pointer-events: none;
+            transform: translate(-50%, -50%) scale(0.8) !important;
+        }
+    </style>
+</head>
+<body>
+
+    <header>
+        <input type="file" id="fileInput" accept="image/*" style="display: none;">
+        <button class="btn" onclick="document.getElementById('fileInput').click()">Enviar Imagem</button>
+        <button class="btn" onclick="resetCanvas()">Limpar / Desenhar</button>
+        <button class="btn" onclick="startTransformation()">Iniciar Transformação</button>
+    </header>
+
+    <div id="stage">
+        <div id="info-text">A imagem será transformada usando suas próprias cores e reorganizada através de simulação de fluidos.</div>
+        
+        <div id="input-wrapper">
+            <div class="label" style="top: -25px; left: 0;">Entrada (Desenhe ou Carregue)</div>
+            <canvas id="inputCanvas" width="400" height="400"></canvas>
+        </div>
+
+        <div id="display-container">
+            <canvas id="finalCanvas"></canvas>
+            <div class="label" id="outputLabel" style="display:none; bottom: 20px; right: 20px;">Visualização da transformação</div>
+        </div>
+
+        <div id="status-overlay">Pronto.</div>
+    </div>
+
+<script>
+    const PROXY = "https://corsproxy.io/?"; 
+    const TARGET_URL = "https://encrypted-tbn0.gstatic.com/images?q=tbn:ANd9GcQ_hPDeW0ry7bDXAnMfjnUVkiNGF0fVbl9NLw&s";
+    const TARGET_SRC = PROXY + encodeURIComponent(TARGET_URL);
+
+    const inputCanvas = document.getElementById('inputCanvas');
+    const inputCtx = inputCanvas.getContext('2d', { willReadFrequently: true });
+    const finalCanvas = document.getElementById('finalCanvas');
+    const finalCtx = finalCanvas.getContext('2d');
+    const statusMsg = document.getElementById('status-overlay');
+    const inputWrapper = document.getElementById('input-wrapper');
+
+    let particles = [];
+    let animationFrameId;
+    let inputColors = [];
+    let isDrawing = false;
+    let isTransforming = false;
+    
+    // --- ALTERAÇÃO PRINCIPAL PARA CORRIGIR ESPAÇOS VAZIOS ---
+    // Removemos o tamanho fixo. Ele será calculado com base no zoom.
+    let currentParticleSize = 2; 
+    
+    // Diminuímos o SKIP_FACTOR para 2 (qualidade média/alta). 
+    // Se seu PC for muito rápido e quiser ULTRA detalhe, mude para 1.
+    const SKIP_FACTOR = 2;   
+    
+    const FLUID_FRICTION = 0.92;
+    const FLUID_EASE = 0.05;
+
+    // --- Inicialização ---
+    function initInput() {
+        inputCtx.fillStyle = '#ffffff';
+        inputCtx.fillRect(0, 0, inputCanvas.width, inputCanvas.height);
+        inputCtx.lineCap = 'round';
+        inputCtx.lineJoin = 'round';
+        inputCtx.lineWidth = 10;
+        
+        inputCtx.font = "bold 60px sans-serif";
+        inputCtx.fillStyle = "#eee";
+        inputCtx.textAlign = "center";
+        inputCtx.fillText("DESENHE", 200, 200);
+        inputCtx.fillStyle = "#fff"; 
+    }
+
+    // Desenho
+    inputCanvas.addEventListener('mousedown', (e) => {
+        isDrawing = true;
+        inputCtx.beginPath();
+        inputCtx.moveTo(e.offsetX, e.offsetY);
+        const hue = Math.floor(Math.random() * 360);
+        inputCtx.strokeStyle = `hsl(${hue}, 70%, 50%)`;
+    });
+    inputCanvas.addEventListener('mousemove', (e) => {
+        if (!isDrawing) return;
+        inputCtx.lineTo(e.offsetX, e.offsetY);
+        inputCtx.stroke();
+    });
+    window.addEventListener('mouseup', () => isDrawing = false);
+
+    // Upload
+    document.getElementById('fileInput').addEventListener('change', (e) => {
+        const file = e.target.files[0];
+        if (!file) return;
+        const img = new Image();
+        img.onload = () => {
+            inputCtx.fillStyle = '#fff';
+            inputCtx.fillRect(0, 0, inputCanvas.width, inputCanvas.height);
+            const scale = Math.min(inputCanvas.width / img.width, inputCanvas.height / img.height);
+            const x = (inputCanvas.width / 2) - (img.width / 2) * scale;
+            const y = (inputCanvas.height / 2) - (img.height / 2) * scale;
+            inputCtx.drawImage(img, x, y, img.width * scale, img.height * scale);
+            statusMsg.innerText = "Imagem carregada. Clique em 'Iniciar'.";
+        };
+        img.src = URL.createObjectURL(file);
+    });
+
+    function resetCanvas() {
+        cancelAnimationFrame(animationFrameId);
+        isTransforming = false;
+        inputWrapper.classList.remove('fade-out');
+        finalCanvas.style.display = 'none';
+        document.getElementById('outputLabel').style.display = 'none';
+        statusMsg.innerText = "Pronto.";
+        initInput();
+    }
+
+    initInput();
+
+    // --- Transformação ---
+    async function startTransformation() {
+        if (isTransforming) return;
+        isTransforming = true;
+        statusMsg.innerText = "Analisando cores e estrutura...";
+
+        inputColors = extractInputColors();
+        if (inputColors.length === 0) inputColors.push({r:0, g:0, b:0}); 
+
+        try {
+            statusMsg.innerText = "Carregando alvo...";
+            const targetImg = await loadTargetImage(TARGET_SRC);
+            
+            // Aumentamos o Scale Display para a imagem ficar grande na tela
+            const scaleDisplay = 3.0; 
+            
+            finalCanvas.width = targetImg.width * scaleDisplay;
+            finalCanvas.height = targetImg.height * scaleDisplay;
+            
+            // --- CORREÇÃO DE DENSIDADE (Tamanho Dinâmico) ---
+            // O tamanho da partícula agora é o fator de escala * o fator de pulo.
+            // Adicionamos +0.6px para garantir um leve overlap e eliminar linhas pretas.
+            currentParticleSize = (scaleDisplay * SKIP_FACTOR) + 0.6;
+
+            const tempCanvas = document.createElement('canvas');
+            tempCanvas.width = targetImg.width;
+            tempCanvas.height = targetImg.height;
+            const tempCtx = tempCanvas.getContext('2d');
+            tempCtx.drawImage(targetImg, 0, 0);
+            
+            const imgData = tempCtx.getImageData(0, 0, targetImg.width, targetImg.height).data;
+            
+            createParticles(imgData, targetImg.width, targetImg.height, scaleDisplay);
+
+            inputWrapper.classList.add('fade-out');
+            setTimeout(() => {
+                finalCanvas.style.display = 'block';
+                document.getElementById('outputLabel').style.display = 'block';
+                statusMsg.innerText = "Simulando fluidos...";
+                animate();
+            }, 800);
+
+        } catch (error) {
+            console.error(error);
+            statusMsg.innerText = "Erro ao carregar imagem alvo (CORS).";
+            isTransforming = false;
+        }
+    }
+
+    function loadTargetImage(src) {
+        return new Promise((resolve, reject) => {
+            const img = new Image();
+            img.crossOrigin = "Anonymous";
+            img.onload = () => resolve(img);
+            img.onerror = reject;
+            img.src = src;
+        });
+    }
+
+    function extractInputColors() {
+        const data = inputCtx.getImageData(0, 0, inputCanvas.width, inputCanvas.height).data;
+        const colors = [];
+        for (let i = 0; i < data.length; i += 40) {
+            const r = data[i], g = data[i+1], b = data[i+2];
+            if (r < 250 || g < 250 || b < 250) colors.push({r, g, b});
+        }
+        return colors;
+    }
+
+    function createParticles(targetData, w, h, scale) {
+        particles = [];
+        
+        for (let y = 0; y < h; y += SKIP_FACTOR) {
+            for (let x = 0; x < w; x += SKIP_FACTOR) {
+                const index = (y * w + x) * 4;
+                const r = targetData[index], g = targetData[index+1], b = targetData[index+2], a = targetData[index+3];
+
+                if (a > 128) {
+                    const luminance = 0.299*r + 0.587*g + 0.114*b;
+                    
+                    let baseColor = inputColors[Math.floor(Math.random() * inputColors.length)];
+                    if (!baseColor) baseColor = {r:0, g:0, b:0};
+
+                    const factor = luminance / 255; 
+                    
+                    const startX = Math.random() * finalCanvas.width;
+                    const startY = Math.random() * finalCanvas.height;
+
+                    particles.push({
+                        x: startX,
+                        y: startY,
+                        targetX: x * scale,
+                        targetY: y * scale,
+                        vx: (Math.random() - 0.5) * 10,
+                        vy: (Math.random() - 0.5) * 10,
+                        // Cor ligeiramente mais vibrante
+                        color: `rgb(${baseColor.r * factor * 1.2}, ${baseColor.g * factor * 1.2}, ${baseColor.b * factor * 1.2})`,
+                        drag: 0.9 + Math.random() * 0.05,
+                        phase: Math.random() * Math.PI * 2
+                    });
+                }
+            }
+        }
+    }
+
+    function animate() {
+        // Usamos clearRect total para garantir nitidez, já que agora os pixels se tocam
+        finalCtx.clearRect(0, 0, finalCanvas.width, finalCanvas.height);
+        
+        let settledCount = 0;
+        const time = Date.now() * 0.002;
+
+        for (let i = 0; i < particles.length; i++) {
+            const p = particles[i];
+            const dx = p.targetX - p.x;
+            const dy = p.targetY - p.y;
+            const dist = Math.sqrt(dx*dx + dy*dy);
+
+            const force = dist * FLUID_EASE; 
+            const noiseFactor = Math.min(dist * 0.02, 5); 
+            const turbulenceX = Math.sin(time + p.y * 0.01 + p.phase) * noiseFactor;
+            const turbulenceY = Math.cos(time + p.x * 0.01 + p.phase) * noiseFactor;
+
+            const angle = Math.atan2(dy, dx);
+            p.vx += Math.cos(angle) * force * 0.05;
+            p.vy += Math.sin(angle) * force * 0.05;
+
+            p.vx += turbulenceX * 0.1;
+            p.vy += turbulenceY * 0.1;
+
+            p.x += p.vx;
+            p.y += p.vy;
+
+            p.vx *= p.drag * FLUID_FRICTION;
+            p.vy *= p.drag * FLUID_FRICTION;
+
+            finalCtx.fillStyle = p.color;
+            
+            // AQUI É A MÁGICA: Usamos o tamanho dinâmico calculado
+            finalCtx.fillRect(p.x, p.y, currentParticleSize, currentParticleSize);
+
+            if (dist < 1 && Math.abs(p.vx) < 0.1) settledCount++;
+        }
+
+        const progress = Math.floor((settledCount / particles.length) * 100);
+        
+        if (progress < 99) {
+            statusMsg.innerText = `Transformando... ${progress}%`;
+            animationFrameId = requestAnimationFrame(animate);
+        } else {
+            statusMsg.innerText = "Transformação concluída.";
+            finalCtx.clearRect(0, 0, finalCanvas.width, finalCanvas.height);
+            particles.forEach(p => {
+                finalCtx.fillStyle = p.color;
+                // Renderização final perfeita
+                finalCtx.fillRect(p.targetX, p.targetY, currentParticleSize, currentParticleSize);
+            });
+        }
+    }
+</script>
+</body>
+</html>
